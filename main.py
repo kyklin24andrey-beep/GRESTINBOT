@@ -9,18 +9,18 @@ from dotenv import load_dotenv
 from aiohttp import web
 from deep_translator import GoogleTranslator
 
-# Настройка логирования в консоль
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# ОБНОВЛЕННЫЙ URL (Новый роутер Hugging Face)
 API_URL = "https://router.huggingface.co/hf-inference/models/nroggendorff/unstable-diffusion"
-HF_TOKEN = os.getenv("HF_TOKEN")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Токены (очистка от лишних пробелов)
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -33,75 +33,59 @@ async def query_hf(prompt: str):
         "x-use-cache": "false"
     }
     payload = {"inputs": prompt}
-
-    logger.info(f">>> Отправка запроса к HF. Промпт: {prompt}")
     
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(API_URL, headers=headers, json=payload, timeout=90) as response:
-                content_type = response.headers.get('Content-Type', '')
-                
+            async with session.post(API_URL, headers=headers, json=payload, timeout=120) as response:
                 if response.status == 200:
-                    logger.info("<<< Успешный ответ от API (200 OK)")
                     return await response.read()
-                
                 elif response.status == 503:
-                    logger.warning("<<< Модель загружается (503 Service Unavailable)")
                     return "loading"
-                
                 else:
-                    err_text = await response.text()
-                    logger.error(f"<<< Ошибка API {response.status}: {err_text}")
-                    return f"error_{response.status}_{err_text}"
-                    
+                    err = await response.text()
+                    logger.error(f"API Error {response.status}: {err}")
+                    return None
         except Exception as e:
-            logger.error(f"!!! Ошибка сети/соединения: {str(e)}")
-            return f"exception_{str(e)}"
+            logger.error(f"Network error: {e}")
+            return None
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer("🎨 Бот запущен! Пиши запрос на любом языке.")
+    await message.answer("🎨 Привет! Напиши мне, что нарисовать. Я понимаю русский язык!")
 
 @dp.message(F.text)
 async def handle_text(message: types.Message):
-    user_input = message.text
-    logger.info(f"Сообщение от пользователя {message.from_user.id}: {user_input}")
+    status_msg = await message.answer("🔄 Перевожу запрос...")
     
-    status_msg = await message.answer("🔄 Обработка...")
-
     try:
-        translated_prompt = translator.translate(user_input)
-        logger.info(f"Перевод: {translated_prompt}")
+        # Перевод на английский
+        translated = translator.translate(message.text)
+        logger.info(f"User: {message.text} | Translated: {translated}")
     except Exception as e:
-        logger.error(f"Ошибка перевода: {e}")
-        translated_prompt = user_input
+        logger.error(f"Translation error: {e}")
+        translated = message.text
 
-    await status_msg.edit_text(f"⌛ Генерирую по запросу: `{translated_prompt}`", parse_mode="Markdown")
+    await status_msg.edit_text(f"⌛ Генерирую по запросу: `{translated}`", parse_mode="Markdown")
     
+    # Попытки генерации (если модель "спит")
     for i in range(3):
-        result = await query_hf(translated_prompt)
+        result = await query_hf(translated)
         
         if result == "loading":
-            await status_msg.edit_text(f"⏳ Модель просыпается... Попытка {i+1}/3")
+            await status_msg.edit_text(f"⏳ Модель загружается на сервере... Попытка {i+1}/3")
             await asyncio.sleep(25)
             continue
         
         if isinstance(result, bytes):
             photo = BufferedInputFile(result, filename="art.png")
-            await message.answer_photo(
-                photo, 
-                caption=f"✨ Готово!\n🔤 Промпт: {translated_prompt}"
-            )
+            await message.answer_photo(photo, caption=f"✨ Готово!\n🔤 Запрос: {translated}")
             await status_msg.delete()
             return
-        
-        # Если пришла ошибка
-        error_info = str(result)
-        await status_msg.edit_text(f"❌ Ошибка при генерации.\nКод: `{error_info[:100]}`", parse_mode="Markdown")
-        return
+        break
 
-    await status_msg.edit_text("❌ Модель не успела проснуться. Попробуй еще раз через минуту.")
+    await status_msg.edit_text("❌ Не удалось получить ответ от нейросети. Попробуй позже.")
 
+# Веб-сервер для Health Check на Render
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -111,10 +95,9 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    asyncio.create_task(site.start())
-
-    logger.info("Бот запускается...")
+    await web.TCPSite(runner, "0.0.0.0", port).start()
+    
+    logger.info("Бот запущен через новый роутер!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
