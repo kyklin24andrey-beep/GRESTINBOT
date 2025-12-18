@@ -17,7 +17,6 @@ load_dotenv()
 # Список моделей для перебора (Failover)
 MODELS = [
     "https://router.huggingface.co/hf-inference/models/Yamer-AI/SDXL_Unstable_Diffusers",
-    "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0",
     "https://router.huggingface.co/hf-inference/models/runwayml/stable-diffusion-v1-5"
 ]
 
@@ -105,3 +104,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
